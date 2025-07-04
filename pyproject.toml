@@ -1,0 +1,15 @@
+# pyproject.toml
+[project]
+name = "ComfyUI-BBTools"
+description = "Some custom nodes for comfyui"
+version = "0.0.1"
+license = { file = "LICENSE.txt" }
+dependencies  = [] 
+
+[project.urls]
+Repository = "https://github.com/bbaudio-2025/ComfyUI-BBTools"
+
+[tool.comfy]
+PublisherId = "bbaudio" 
+DisplayName = "ComfyUI-BBTools" 
+Icon = ""
