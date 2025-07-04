@@ -42,13 +42,13 @@ def convert_color(image, origin_color, new_color, tolerance):
     image.putdata(new_data)
     return image
 
-def crossfadevideos(video1, video2, num_corssfade_frame):
+def cross_fade_videos(video1, video2, num_corssfade_frame):
     if video1.ndim != video2.ndim:
-        raise ValueError("corssfadevideos: 拼接图片类型不一致\nImageType Mismatch")
+        raise ValueError("crossfadevideos: 拼接图片类型不一致\nImageType Mismatch")
     if video1[[0],].shape != video2[[0],].shape:
-        raise ValueError("corssfadevideos: 拼接图片尺寸不一致\nImageSize Mismatch")
+        raise ValueError("crossfadevideos: 拼接图片尺寸不一致\nImageSize Mismatch")
     if num_corssfade_frame > video1.shape[0] or num_corssfade_frame > video2.shape[0]:
-        raise ValueError("corssfadevideos: 拼接图片数目应大于过渡数目\nVideoLength should be longer than CrossLength")
+        raise ValueError("crossfadevideos: 拼接图片数目应大于过渡数目\nVideoLength should be longer than CrossLength")
     video_slice1 = video1[:-num_corssfade_frame]
     video_slice2 = video1[-num_corssfade_frame:]
     video_slice3 = video2[:num_corssfade_frame]
@@ -67,6 +67,56 @@ def crossfadevideos(video1, video2, num_corssfade_frame):
         index += 1
     blended_slice = torch.cat(blend_list, dim=0)
     result = torch.cat((video_slice1, blended_slice, video_slice4), dim=0)
+    return result
+
+def cross_fade_videos_loopback(video1, video2, cross_fade_frames1, cross_fade_frames2):
+    if video1.shape[1:] != video2.shape[1:]:
+        raise ValueError("crossfadevideosloopback: 拼接图片类型或尺寸不一致\nImage Type or Dimension Mismatch")
+    if cross_fade_frames1 > video1.shape[0] or cross_fade_frames1 > video2.shape[0] or cross_fade_frames2 > video1.shape[0] or cross_fade_frames2 > video2.shape[0]:
+        raise ValueError("crossfadevideosloopback: 拼接图片数目应大于过渡数目\nVideo Length should be longer than CrossLength")
+    if cross_fade_frames1 + cross_fade_frames2 > min(video1.shape[0], video2.shape[0]):
+        raise ValueError("crossfadevideosloopback: 两组过渡帧数量之和大于输入图片数量\nVideo Length should be longer than the sum of Cross Lengths")
+    
+    video_slice1 = video1[0:cross_fade_frames2]
+    video_slice2 = video1[cross_fade_frames2:-cross_fade_frames1]
+    video_slice3 = video1[-cross_fade_frames1:]
+    video_slice4 = video2[0:cross_fade_frames1]
+    video_slice5 = video2[cross_fade_frames1:-cross_fade_frames2]
+    video_slice6 = video2[-cross_fade_frames2:]
+    alpha_list1 = []
+    alpha_list2 = []
+
+    count1 = cross_fade_frames1 + 1
+    while count1 > 1:
+        alpha_list1.append((count1 - 1) / (cross_fade_frames1 + 1))
+        count1 -= 1
+    alpha_list1.reverse()
+
+    count2 = cross_fade_frames2 + 1
+    while count2 > 1:
+        alpha_list2.append((count2 - 1) / (cross_fade_frames2 + 1))
+        count2 -= 1
+    alpha_list2.reverse()
+
+    blend_list = []
+    index1 = 0
+    for alpha in alpha_list1:
+        mixed = video_slice3[[index1],] * (1 - alpha) + video_slice4[[index1],] * alpha
+        blend_list.append(mixed)
+        index1 += 1
+    blended_mix1 = torch.cat(blend_list, dim=0)
+    blended_mix1 = torch.cat((video_slice2, blended_mix1, video_slice5), dim=0)
+
+    blend_list2 = []
+    index2 = 0
+    for alpha in alpha_list2:
+        mixed = video_slice6[[index2],] * (1 - alpha) + video_slice1[[index2],] * alpha
+        blend_list2.append(mixed)
+        index2 += 1
+    blended_mix2 = torch.cat(blend_list2, dim=0)
+    blended_mix_all = torch.cat((blended_mix1, blended_mix2), dim=0)
+    result = torch.cat((blended_mix_all[-cross_fade_frames2:], blended_mix_all[0:-cross_fade_frames2]), dim=0)
+
     return result
 
 class EmptyImage:
@@ -146,17 +196,45 @@ class VideosConcatWithCrossFade:
             images2 = comfy.utils.common_upscale(images2.movedim(-1, 1), images1.shape[2], images1.shape[1], "bilinear", "center").movedim(1, -1)
         if cross_fade_frames > images1.shape[0] or cross_fade_frames > images2.shape[0]:
             raise ValueError("图片数量必须大于等于过渡帧数量\nimage lengths must be larger than cross_fade_frames")
-        result = crossfadevideos(images1, images2, cross_fade_frames)
+        result = cross_fade_videos(images1, images2, cross_fade_frames)
+        return (result, )
+    
+class VideosConcatWithCrossFadeLoopback:
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "image_batch_crossfade_loopback"
+    CATEGORY = "image"
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "images1": ("IMAGE",),
+                "images2": ("IMAGE",),
+                "cross_fade_frames1": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1, "display": "number"}),
+                "cross_fade_frames2": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1, "display": "number"}),
+            }
+        }
+    
+    def image_batch_crossfade_loopback(self, images1, images2, cross_fade_frames1, cross_fade_frames2):
+        if images1.shape[1:] != images2.shape[1:]:
+            images2 = comfy.utils.common_upscale(images2.movedim(-1, 1), images1.shape[2], images1.shape[1], "bilinear", "center").movedim(1, -1)
+        if cross_fade_frames1 > images1.shape[0] or cross_fade_frames1 > images2.shape[0] or cross_fade_frames2 > images1.shape[0] or cross_fade_frames2 > images2.shape[0]:
+            raise ValueError("crossfadevideosloopback: 拼接图片数目应大于过渡数目\nVideo Length should be longer than CrossLength")
+        if cross_fade_frames1 + cross_fade_frames2 > min(images1.shape[0], images2.shape[0]):
+            raise ValueError("crossfadevideosloopback: 两组过渡帧数量之和大于输入图片数量\nVideo Length should be longer than the sum of Cross Lengths")
+        result = cross_fade_videos_loopback(images1, images2, cross_fade_frames1, cross_fade_frames2)
         return (result, )
 
 NODE_CLASS_MAPPINGS = {
     "EmptyImageBBTools": EmptyImage,
     "ReplaceColorBBTools": ReplaceColor,
-    "VideosConcatWithCrossFadeBBTools": VideosConcatWithCrossFade
+    "VideosConcatWithCrossFadeBBTools": VideosConcatWithCrossFade,
+    "VideosConcatWithCrossFadeLoopbackBBTools": VideosConcatWithCrossFadeLoopback
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "EmptyImageBBTools": "🅱🅱空白图片|Empty Image",
     "ReplaceColorBBTools": "🅱🅱色彩替换|Replace Color",
-    "VideosConcatWithCrossFadeBBTools": "🅱🅱视频淡入拼接|Videos Concat with CrossFade"
+    "VideosConcatWithCrossFadeBBTools": "🅱🅱视频淡入拼接|Videos Concat with CrossFade",
+    "VideosConcatWithCrossFadeLoopbackBBTools": "🅱🅱循环视频淡入拼接|Loopback Videos Concat with CrossFade"
 }
